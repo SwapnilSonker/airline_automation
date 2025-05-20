@@ -1,0 +1,8 @@
+playwright 
+pillow 
+requests
+python-dotenv
+anthropic
+pytesseract
+opencv-python
+numpy
