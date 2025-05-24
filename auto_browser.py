@@ -56,111 +56,201 @@ class AutoBrowser:
 
     # Add these methods to the AutoBrowser class
     async def capture_page_state(self):
-        """Capture the current state of the page"""
-        print("Capturing page state...")
-        
-        # Get page metadata
-        url = self.page.url
-        title = await self.page.title()
-        
-        # Take screenshot
-        screenshot_bytes = await self.page.screenshot()
-        screenshot_base64 = base64.b64encode(screenshot_bytes).decode('utf-8')
-        
-        # Extract visible text
-        text_content = await self.page.evaluate('''() => {
-            return document.body.innerText;
-        }''')
-        
-        # Extract interactive elements (simplified version)
-        elements = await self.page.evaluate('''() => {
-            const getVisibleElements = () => {
-                // Get clickable elements
-                const clickables = Array.from(document.querySelectorAll('button, a, input, select, [role="button"]'));
+        """Enhanced page state capture with better element detection"""
+        try:
+            # Wait for page to be fully loaded
+            await self.wait_for_stable()
+            
+            # Get page content and screenshot
+            content = await self.page.content()
+            screenshot = await self.page.screenshot(type="jpeg", quality=80)
+            screenshot_base64 = base64.b64encode(screenshot).decode('utf-8')
+            
+            # Enhanced element detection
+            elements = await self.page.evaluate("""() => {
+                function getAllElements() {
+                    const elements = [];
+                    
+                    // Basic interactive elements
+                    const basicElements = document.querySelectorAll(
+                        'button, a, input, select, [role="button"], [role="link"], ' +
+                        '[role="menuitem"], [role="option"], [role="tab"], ' +
+                        '[contenteditable="true"], [tabindex="0"]'
+                    );
+                    
+                    // Custom elements and components
+                    const customElements = document.querySelectorAll(
+                        '[class*="dropdown"], [class*="select"], [class*="picker"], ' +
+                        '[class*="date"], [class*="calendar"], [class*="modal"], ' +
+                        '[class*="popup"], [class*="dialog"]'
+                    );
+                    
+                    // Form elements
+                    const formElements = document.querySelectorAll(
+                        'form input, form select, form textarea, ' +
+                        '[type="checkbox"], [type="radio"], [type="file"], ' +
+                        '[type="date"], [type="datetime-local"]'
+                    );
+                    
+                    // Combine all elements
+                    const allElements = [...basicElements, ...customElements, ...formElements];
+                    
+                    // Process each element
+                    allElements.forEach((el, index) => {
+                        if (el.offsetParent !== null) { // Only visible elements
+                            const rect = el.getBoundingClientRect();
+                            const style = window.getComputedStyle(el);
+                            
+                            elements.push({
+                                index: index,
+                                tag: el.tagName.toLowerCase(),
+                                type: el.type || '',
+                                id: el.id || '',
+                                name: el.name || '',
+                                class: el.className || '',
+                                text: el.textContent?.trim() || '',
+                                value: el.value || '',
+                                placeholder: el.placeholder || '',
+                                role: el.getAttribute('role') || '',
+                                aria_label: el.getAttribute('aria-label') || '',
+                                href: el.href || '',
+                                x: rect.x,
+                                y: rect.y,
+                                width: rect.width,
+                                height: rect.height,
+                                is_visible: style.display !== 'none' && style.visibility !== 'hidden',
+                                is_enabled: !el.disabled,
+                                is_required: el.required || false,
+                                validation_message: el.validationMessage || '',
+                                parent_form: el.form ? {
+                                    id: el.form.id,
+                                    action: el.form.action,
+                                    method: el.form.method
+                                } : null,
+                                options: el.tagName === 'SELECT' ? Array.from(el.options).map(opt => ({
+                                    value: opt.value,
+                                    text: opt.text,
+                                    selected: opt.selected
+                                })) : null
+                            });
+                        }
+                    });
+                    
+                    return elements;
+                }
                 
-                return clickables.map(el => {
-                    // Get text content
-                    const text = el.innerText || el.value || el.placeholder || '';
-                    
-                    // Get element type
-                    const tag = el.tagName.toLowerCase();
-                    
-                    // Get attributes
-                    const id = el.id;
-                    const classes = Array.from(el.classList).join(' ');
-                    const type = el.type || '';
-                    const href = el.href || '';
-                    const role = el.getAttribute('role') || '';
-                    
-                    // Get position for visual reference
-                    const rect = el.getBoundingClientRect();
-                    const position = {
-                        x: rect.x,
-                        y: rect.y,
-                        width: rect.width,
-                        height: rect.height
-                    };
-                    
-                    // Try to get a good description of the element
-                    let description = text.trim();
-                    if (!description) {
-                        if (el.getAttribute('aria-label')) {
-                            description = el.getAttribute('aria-label');
-                        } else if (el.getAttribute('title')) {
-                            description = el.getAttribute('title');
-                        } else if (el.getAttribute('name')) {
-                            description = el.getAttribute('name');
-                        } else if (id) {
-                            description = id;
+                // Handle iframes
+                const iframeElements = [];
+                document.querySelectorAll('iframe').forEach(iframe => {
+                    try {
+                        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                        const iframeElements = getAllElements.call(iframeDoc);
+                        iframeElements.forEach(el => {
+                            el.iframe = true;
+                            el.iframe_id = iframe.id;
+                        });
+                        elements.push(...iframeElements);
+                    } catch (e) {
+                        console.log('Cannot access iframe content:', e);
+                    }
+                });
+                
+                return getAllElements();
+            }""")
+            
+            # Get visible text content
+            visible_text = await self.page.evaluate("""() => {
+                const walker = document.createTreeWalker(
+                    document.body,
+                    NodeFilter.SHOW_TEXT,
+                    {
+                        acceptNode: function(node) {
+                            const style = window.getComputedStyle(node.parentElement);
+                            if (style.display === 'none' || style.visibility === 'hidden') {
+                                return NodeFilter.FILTER_REJECT;
+                            }
+                            return NodeFilter.FILTER_ACCEPT;
                         }
                     }
-                    
-                    return {
-                        tag,
-                        text: text.trim(),
-                        id,
-                        classes,
-                        type,
-                        href,
-                        role,
-                        position,
-                        description
-                    };
-                }).filter(el => {
-                    // Filter out elements with no text and no description
-                    return el.text || el.description;
-                });
-            };
+                );
+                
+                const texts = [];
+                let node;
+                while (node = walker.nextNode()) {
+                    const text = node.textContent.trim();
+                    if (text) {
+                        texts.push(text);
+                    }
+                }
+                return texts.join('\\n');
+            }""")
             
-            return getVisibleElements();
-        }''')
-        
-        # Compile the full state
-        page_state = {
-            "url": url,
-            "title": title,
-            "text_content": text_content,
-            "interactive_elements": elements,
-            "screenshot_base64": screenshot_base64
-        }
-        
-        return page_state
+            # Get form validation state
+            validation_state = await self.page.evaluate("""() => {
+                const forms = document.querySelectorAll('form');
+                return Array.from(forms).map(form => ({
+                    id: form.id,
+                    action: form.action,
+                    method: form.method,
+                    elements: Array.from(form.elements).map(el => ({
+                        name: el.name,
+                        type: el.type,
+                        required: el.required,
+                        validationMessage: el.validationMessage,
+                        valid: el.validity.valid
+                    }))
+                }));
+            }""")
+            
+            return {
+                "url": self.page.url,
+                "title": await self.page.title(),
+                "elements": elements,
+                "visible_text": visible_text,
+                "validation_state": validation_state,
+                "screenshot": screenshot_base64
+            }
+            
+        except Exception as e:
+            print(f"Error capturing page state: {str(e)}")
+            return None
 
-    async def wait_for_stable(self, timeout=5000):
-        """Wait for the page to stabilize"""
+    async def wait_for_stable(self, timeout=10000):
+        """Enhanced page stabilization with multiple checks"""
         try:
-            # Wait for network to be idle (no requests for 500ms)
+            # Wait for network idle
             await self.page.wait_for_load_state("networkidle", timeout=timeout)
             
-            # Wait a bit more for any JavaScript animations
+            # Wait for JavaScript execution
+            await self.page.wait_for_function("""() => {
+                return document.readyState === 'complete' &&
+                    !document.querySelector('.loading, .spinner, [aria-busy="true"]');
+            }""", timeout=timeout)
+            
+            # Wait for animations to complete
+            await self.page.wait_for_function("""() => {
+                const animations = document.getAnimations();
+                return animations.every(animation => 
+                    animation.playState === 'finished' || 
+                    animation.playState === 'idle'
+                );
+            }""", timeout=timeout)
+            
+            # Wait for AJAX requests to complete
+            await self.page.wait_for_function("""() => {
+                return window.jQuery ? jQuery.active === 0 : true;
+            }""", timeout=timeout)
+            
+            # Wait for dynamic content
+            await self.page.wait_for_function("""() => {
+                return !document.querySelector('[data-loading="true"]');
+            }""", timeout=timeout)
+            
+            # Additional delay for any remaining animations
             await asyncio.sleep(1)
             
-            print("Page stabilized")
-            return True
         except Exception as e:
-            print(f"Warning: Page did not stabilize completely: {e}")
-            # Continue anyway
-            return False  
+            print(f"Warning: Page stabilization timeout: {str(e)}")
 
     # Add to AutoBrowser class:
     async def _execute_search(self, search_query):
@@ -238,38 +328,169 @@ class AutoBrowser:
         print(f"No search result found for {site_name}")
         return False
     
+
+    async def _handle_action_error(self, error, decision):
+        """Enhanced error handling with recovery strategies"""
+        try:
+            # Check for common error types
+            if "Element is not attached to the DOM" in str(error):
+                return await self._handle_stale_element(decision)
+            elif "Element is not visible" in str(error):
+                return await self._handle_hidden_element(decision)
+            elif "Timeout" in str(error):
+                return await self._handle_timeout(decision)
+            elif "Target closed" in str(error):
+                return await self._handle_browser_closed()
+            else:
+                print(f"Unhandled error: {str(error)}")
+                return False
+        except Exception as e:
+            print(f"Error in error handler: {str(e)}")
+            return False
+
+    async def _handle_stale_element(self, decision):
+        """Handle stale element errors"""
+        try:
+            # Refresh page state
+            await self.capture_page_state()
+            
+            # Retry action
+            return await self.execute_action(decision)
+        except Exception as e:
+            print(f"Error handling stale element: {str(e)}")
+            return False
+
+    async def _handle_hidden_element(self, decision):
+        """Handle hidden element errors"""
+        try:
+            # Try to scroll element into view
+            element = await self._get_element_by_index(decision['element_index'])
+            if element:
+                await element.scroll_into_view_if_needed()
+                return await self.execute_action(decision)
+            return False
+        except Exception as e:
+            print(f"Error handling hidden element: {str(e)}")
+            return False
+
+    async def _handle_timeout(self, decision):
+        """Handle timeout errors"""
+        try:
+            # Increase timeout and retry
+            self.page.set_default_timeout(30000)
+            return await self.execute_action(decision)
+        except Exception as e:
+            print(f"Error handling timeout: {str(e)}")
+            return False
+
+
+
+    async def _execute_select(self, element_index, value):
+        """Handle dropdown selection"""
+        try:
+            element = await self._get_element_by_index(element_index)
+            if not element:
+                return False
+                
+            # Handle different types of dropdowns
+            if element.tag == 'select':
+                await element.select_option(value=value)
+            else:
+                # Handle custom dropdowns
+                await element.click()
+                await self.page.wait_for_selector(f'[role="option"]:has-text("{value}")')
+                await self.page.click(f'[role="option"]:has-text("{value}")')
+                
+            return True
+        except Exception as e:
+            print(f"Error selecting option: {str(e)}")
+            return False
+
+    async def _execute_file_upload(self, element_index, file_path):
+        """Handle file uploads"""
+        try:
+            element = await self._get_element_by_index(element_index)
+            if not element:
+                return False
+                
+            await element.set_input_files(file_path)
+            return True
+        except Exception as e:
+            print(f"Error uploading file: {str(e)}")
+            return False
+
+    async def _execute_checkbox(self, element_index, checked):
+        """Handle checkbox toggling"""
+        try:
+            element = await self._get_element_by_index(element_index)
+            if not element:
+                return False
+                
+            current_state = await element.is_checked()
+            if current_state != checked:
+                await element.click()
+            return True
+        except Exception as e:
+            print(f"Error toggling checkbox: {str(e)}")
+            return False
+
+    async def _execute_date_picker(self, element_index, date_value):
+        """Handle date picker selection"""
+        try:
+            element = await self._get_element_by_index(element_index)
+            if not element:
+                return False
+                
+            # Click to open date picker
+            await element.click()
+            
+            # Parse date
+            date = datetime.strptime(date_value, '%Y-%m-%d')
+            
+            # Select date
+            await self.page.click(f'[aria-label="{date.strftime("%B %d, %Y")}"]')
+            return True
+        except Exception as e:
+            print(f"Error selecting date: {str(e)}")
+            return False
+
+
     # Add these methods to the AutoBrowser class
     async def execute_action(self, decision):
-        """Execute the action based on AI decision"""
-        action_type = decision["action_type"]
-        element_index = decision.get("element_index")
-        input_value = decision.get("input_value")
-        
-        # Record this action in history
-        self.action_history.append({
-            "action_type": action_type,
-            "element_index": element_index,
-            "input_value": input_value,
-            "description": decision["description"]
-        })
-        
-        if action_type == "click":
-            return await self._execute_click(element_index)
-        elif action_type == "type":
-            return await self._execute_type(element_index, input_value)
-        elif action_type == "navigate":
-            return await self.navigate(input_value)
-        elif action_type == "search":
-            return await self._execute_search(input_value)  # Add this line
-        elif action_type == "wait":
-            await asyncio.sleep(3)  # Simple wait
-            return True
-        elif action_type == "human_help" or action_type == "complete":
-            # These are handled by the main loop
-            return True
-        else:
-            print(f"Unknown action type: {action_type}")
-            return False
+        """Enhanced action execution with better error handling"""
+        try:
+            action_type = decision['action_type']
+            element_index = decision.get('element_index')
+            input_value = decision.get('input_value')
+            
+            # Handle different action types
+            if action_type == "click":
+                return await self._execute_click(element_index)
+            elif action_type == "type":
+                return await self._execute_type(element_index, input_value)
+            elif action_type == "select":
+                return await self._execute_select(element_index, input_value)
+            elif action_type == "navigate":
+                return await self.navigate(input_value)
+            elif action_type == "wait":
+                await asyncio.sleep(float(input_value))
+                return True
+            elif action_type == "file_upload":
+                return await self._execute_file_upload(element_index, input_value)
+            elif action_type == "checkbox":
+                return await self._execute_checkbox(element_index, input_value)
+            elif action_type == "radio":
+                return await self._execute_radio(element_index, input_value)
+            elif action_type == "date_picker":
+                return await self._execute_date_picker(element_index, input_value)
+            else:
+                print(f"Unknown action type: {action_type}")
+                return False
+                
+        except Exception as e:
+            print(f"Error executing action: {str(e)}")
+            return await self._handle_action_error(e, decision)
+
 
     async def _execute_click(self, element_index):
         """Click on the specified element"""
@@ -732,7 +953,6 @@ if __name__ == "__main__":
         print(f"\nUnexpected error: {e}")
     finally:
         print("Script finished.")
-
 if __name__ == "__main__":
     print("Welcome to the Flight Booking Automation System!")
     print("\nPlease enter your flight booking task. For example:")
