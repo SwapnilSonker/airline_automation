@@ -10,14 +10,14 @@ async def fill_route_fields(page, from_city, to_city):
     # From City
     await page.click("input#fromCity")
     await page.fill("input.react-autosuggest__input", from_city)
-    await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(4000)
     await page.keyboard.press("ArrowDown")
     await page.keyboard.press("Enter")
 
     # To City
     await page.click("input#toCity")
     await page.fill("input.react-autosuggest__input", to_city)
-    await page.wait_for_timeout(1000)
+    await page.wait_for_timeout(4000)
     await page.keyboard.press("ArrowDown")
     await page.keyboard.press("Enter")
     print("end here")
@@ -38,18 +38,14 @@ async def open_makemytrip_and_close_modal():
         await page.click('span.commonModal__close')
 
         from_city = "Delhi"
-        to_city = "Mumbai"
+        to_city = "Bengaluru"
 
         await fill_route_fields(page , from_city , to_city)
 
         print("filled the route")
 
-        # await page.wait_for_selector("div.flt_fsw_inputBox dates inactiveWidget")
-        # await page.click('div.flt_fsw_inputBox dates inactiveWidget')
-
-
         # 🗓️ Set the date you want to click
-        target_date = datetime(2025, 10, 10)
+        target_date = datetime(2025, 6, 29)
         aria_label_value = format_aria_label(target_date)
 
         print(f"🗓️ Target date: {aria_label_value}")
@@ -67,7 +63,6 @@ async def open_makemytrip_and_close_modal():
 
         print(f"🧪 CSS Selector: {selector}")
         # 🕒 Wait for the element
-        # await page.wait_for_selector(selector, timeout=5000)
 
         print("waiting for the element")
 
@@ -76,12 +71,12 @@ async def open_makemytrip_and_close_modal():
         tries = 0
 
         while tries < max_tries:
-                element = await page.query_selector(selector)
+                element = page.locator(selector)
                 if element:
                     await element.dblclick()
                     print(f"✅ Double-clicked on: {aria_label_value}")
-                    await asyncio.sleep(20)
-                    return
+                    await asyncio.sleep(2)
+                    break
                 else:
                     print(f"🔍 Not found: {aria_label_value}, clicking 'Next Month'...")
 
@@ -93,15 +88,16 @@ async def open_makemytrip_and_close_modal():
                         break
 
                     await next_btn.click()
-                    await page.wait_for_timeout(1000)  # wait for calendar to update
+                    await page.wait_for_timeout(2000)  # wait for calendar to update
 
                 tries += 1
+                
+        print("🔵 Press ENTER to close the browser.")
+        await asyncio.get_event_loop().run_in_executor(None, input)
+        await page.locator('a:has-text("Search")').click()
+        print("clicked on search")
 
-        print(f"🚫 Failed to find: {aria_label_value} after {max_tries} attempts.")
-
-
-        # Optional: keep browser open for a few seconds to observe
-        # await asyncio.sleep(20)
+        await page.wait_for_timeout(30000)
 
         await browser.close()
 
